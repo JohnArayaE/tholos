@@ -3159,3 +3159,49 @@ mod proptest_settlement {
         }
     }
 }
+
+#[test]
+fn test_initialize_rejects_anti_snipe_hard_max_over_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let token_id = setup(&env);
+    let contract_id = env.register(TholosV2, ());
+    let client = TholosV2Client::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let result = init_full(
+        &client,
+        &admin,
+        &token_id,
+        DEFAULT_REGISTRATION_SECS,
+        DEFAULT_ANTI_SNIPE_EXT_SECS,
+        MAX_ANTI_SNIPE_HARD_MAX_SECS + 1,
+        DEFAULT_REVEAL_SECS,
+        DEFAULT_MAX_POSITION,
+        DEFAULT_MAX_TOTAL_WEIGHT,
+    );
+    assert_eq!(result, Err(Ok(Error::InvalidAntiSnipeParams)));
+}
+
+#[test]
+fn test_initialize_accepts_anti_snipe_hard_max_at_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let token_id = setup(&env);
+    let contract_id = env.register(TholosV2, ());
+    let client = TholosV2Client::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let result = init_full(
+        &client,
+        &admin,
+        &token_id,
+        DEFAULT_REGISTRATION_SECS,
+        DEFAULT_ANTI_SNIPE_EXT_SECS,
+        MAX_ANTI_SNIPE_HARD_MAX_SECS,
+        DEFAULT_REVEAL_SECS,
+        DEFAULT_MAX_POSITION,
+        DEFAULT_MAX_TOTAL_WEIGHT,
+    );
+    assert_eq!(result, Ok(Ok(())));
+}
