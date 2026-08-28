@@ -23,13 +23,19 @@ export async function detectWallet(): Promise<WalletState> {
     return { status: "disconnected" };
   }
 
-  return resolveConnectedState();
+  try {
+    return await resolveConnectedState();
+  } catch {
+    return { status: "disconnected" };
+  }
 }
 
 export async function connectWallet(): Promise<WalletState> {
   const access = await requestAccess();
   if (access.error) {
-    return { status: "disconnected" };
+    throw new Error(
+      typeof access.error === "string" ? access.error : "Failed to connect wallet"
+    );
   }
   return resolveConnectedState();
 }
@@ -41,7 +47,11 @@ async function resolveConnectedState(): Promise<WalletState> {
   ]);
 
   if (addressResult.error || !addressResult.address) {
-    return { status: "disconnected" };
+    throw new Error(
+      typeof addressResult.error === "string"
+        ? addressResult.error
+        : "Failed to retrieve wallet address"
+    );
   }
 
   return {
