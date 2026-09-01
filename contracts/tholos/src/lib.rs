@@ -576,7 +576,6 @@ impl Tholos {
         Ok(())
     }
 
-    
     /// Updates the bond amount required for assertions created from this
     /// point on. Only callable by the admin set at initialization, validated
     /// against the same bounds `initialize` already enforces
@@ -589,6 +588,10 @@ impl Tholos {
     /// reads `assertion.bond`, never the live `DataKey::BondAmount`. An
     /// already-open assertion's payout is therefore unaffected by a later
     /// `set_bond_amount` call.
+    ///
+    /// Fails with `NotInitialized` if called before `initialize`, or
+    /// `InvalidBondAmount` if `new_bond_amount` is zero, negative, or greater
+    /// than `MAX_BOND_AMOUNT`.
     pub fn set_bond_amount(env: Env, new_bond_amount: i128) -> Result<(), Error> {
         let admin: Address = env
             .storage()
