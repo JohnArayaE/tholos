@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { jobs as seedJobs, type Job, type Milestone, type MilestoneStatus } from "../data/jobs";
 import { JobsContext, type JobsContextValue, type NewJobInput } from "./jobs-context";
+import type { Assertion } from "../lib/tholos";
 
 /**
  * lib/tholos.ts pulls in the full Stellar SDK. Importing it dynamically, only
@@ -33,6 +34,63 @@ function findMilestone(jobs: Job[], jobId: string, milestoneId: string): Milesto
   return jobs.find((job) => job.id === jobId)?.milestones.find((m) => m.id === milestoneId);
 }
 
+/**
+ * The one place that turns a real `Assertion` read into local milestone
+ * state. `status` is Pending/Disputed/Resolved on-chain, never anything
+ * about "challenge window elapsed" (the contract doesn't track that as a
+ * transition, only `finalize` does), so a still-`Pending` assertion always
+ * maps back to `submitted` here regardless of how much time has passed —
+ * the "ready to finalize" hint in MilestoneRow is a separate, client-side
+ * computation over `opened_at` and is never sourced from `status`.
+ */
+function mapAssertionToPatch(assertion: Assertion): Partial<Milestone> {
+  const assertionOpenedAt = assertion.opened_at.toString();
+  if (assertion.status.tag === "Disputed") {
+    return { status: "disputed" satisfies MilestoneStatus, assertionOpenedAt };
+  }
+  if (assertion.status.tag === "Resolved") {
+    // `final_outcome` is guaranteed `Some` once `status` is `Resolved` (see
+    // docs/src/INTEGRATION.md#reading-the-outcome); `true` means the
+    // asserter's original claim stood (the freelancer's "done"), `false`
+    // means it didn't.
+    return {
+      status: (assertion.final_outcome ? "released" : "returned") satisfies MilestoneStatus,
+      assertionOpenedAt,
+    };
+  }
+  return { status: "submitted" satisfies MilestoneStatus, assertionOpenedAt };
+}
+
+/**
+ * Re-reads real on-chain state for one milestone's assertion and reconciles
+ * local status from it. Used both right after an action (instead of trusting
+ * a hardcoded guess about what the call must have done) and from background
+ * polling / a manual refresh — one code path either way.
+ *
+ * Deliberately swallows read failures: by the time this runs, the action
+ * that triggered it (if any) has already succeeded on-chain, so surfacing a
+ * transient RPC error here would misreport a successful transaction as
+ * failed. Whoever's polling will retry on the next tick.
+ */
+async function reconcileFromChain(
+  setJobs: Dispatch<SetStateAction<Job[]>>,
+  jobId: string,
+  milestoneId: string,
+  assertionId: string,
+  readAs: string,
+): Promise<void> {
+  try {
+    const { getAssertionState } = await loadTholosClient();
+    const assertion = await getAssertionState(BigInt(assertionId), readAs);
+    setJobs((current) => updateMilestone(current, jobId, milestoneId, mapAssertionToPatch(assertion)));
+  } catch (err) {
+    console.warn(
+      `Could not read back on-chain state for milestone ${milestoneId} (assertion ${assertionId}); will retry on next refresh.`,
+      err,
+    );
+  }
+}
+
 export function JobsProvider({ children }: { children: ReactNode }) {
   const [jobs, setJobs] = useState<Job[]>(seedJobs);
 
@@ -58,6 +116,10 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const submitMilestone = useCallback(async (jobId: string, milestoneId: string, signerAddress: string) => {
     const { assertOutcome } = await loadTholosClient();
     const assertionId = (await assertOutcome(signerAddress, true)).toString();
+    // assert_outcome succeeding guarantees a fresh Pending assertion exists;
+    // that much is certain, so it's set immediately rather than waiting on a
+    // round-trip. Everything else (and opened_at, needed for the
+    // finalize-eligibility hint) comes from a real read right after.
     setJobs((current) =>
       updateMilestone(current, jobId, milestoneId, {
         status: "submitted" satisfies MilestoneStatus,
@@ -65,6 +127,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
         assertionId,
       }),
     );
+    await reconcileFromChain(setJobs, jobId, milestoneId, assertionId, signerAddress);
   }, []);
 
   const disputeMilestone = useCallback(async (jobId: string, milestoneId: string, signerAddress: string) => {
@@ -74,7 +137,12 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     }
     const { disputeAssertion } = await loadTholosClient();
     await disputeAssertion(signerAddress, BigInt(milestone.assertionId));
-    setJobs((current) => updateMilestone(current, jobId, milestoneId, { status: "disputed" }));
+    // dispute succeeding guarantees Disputed; reconcile picks up the rest
+    // (and corrects this if, improbably, something else changed it first).
+    setJobs((current) =>
+      updateMilestone(current, jobId, milestoneId, { status: "disputed" satisfies MilestoneStatus }),
+    );
+    await reconcileFromChain(setJobs, jobId, milestoneId, milestone.assertionId, signerAddress);
   }, [jobs]);
 
   const voteOnMilestone = useCallback(
@@ -86,13 +154,10 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       const { resolveAssertion } = await loadTholosClient();
       const decided = await resolveAssertion(resolverAddress, BigInt(milestone.assertionId), agreesWithFreelancer);
       if (decided === null) {
+        // Majority not reached yet; still Disputed, nothing to reconcile.
         return;
       }
-      setJobs((current) =>
-        updateMilestone(current, jobId, milestoneId, {
-          status: decided ? "released" : "returned",
-        }),
-      );
+      await reconcileFromChain(setJobs, jobId, milestoneId, milestone.assertionId, resolverAddress);
     },
     [jobs],
   );
@@ -104,7 +169,15 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     }
     const { finalizeAssertion } = await loadTholosClient();
     await finalizeAssertion(callerAddress, BigInt(milestone.assertionId));
-    setJobs((current) => updateMilestone(current, jobId, milestoneId, { status: "released" }));
+    await reconcileFromChain(setJobs, jobId, milestoneId, milestone.assertionId, callerAddress);
+  }, [jobs]);
+
+  const refreshMilestone = useCallback(async (jobId: string, milestoneId: string, readAs: string) => {
+    const milestone = findMilestone(jobs, jobId, milestoneId);
+    if (!milestone?.assertionId) {
+      return;
+    }
+    await reconcileFromChain(setJobs, jobId, milestoneId, milestone.assertionId, readAs);
   }, [jobs]);
 
   const value = useMemo<JobsContextValue>(
@@ -115,8 +188,9 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       disputeMilestone,
       voteOnMilestone,
       finalizeMilestone,
+      refreshMilestone,
     }),
-    [jobs, createJob, submitMilestone, disputeMilestone, voteOnMilestone, finalizeMilestone],
+    [jobs, createJob, submitMilestone, disputeMilestone, voteOnMilestone, finalizeMilestone, refreshMilestone],
   );
 
   return <JobsContext.Provider value={value}>{children}</JobsContext.Provider>;
