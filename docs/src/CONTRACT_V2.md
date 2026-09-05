@@ -212,15 +212,16 @@ only affect assertions created after the change.
 
 The contract's constructor: Soroban invokes it atomically as part of the
 same operation that creates the contract instance, not as a separate,
-later call. Requires `admin`'s signature and pins it as the permanently
-fixed admin for this instance. This closes a front-running gap the
+later call. Requires `admin`'s signature and pins it as the admin for
+this instance. This closes a front-running gap the
 deploy-then-initialize(admin) shape used to have: since deploy and any
 follow-up call are otherwise separate transactions, nothing used to stop a
 third party from submitting their own `initialize` with their own `admin`
 first and claiming the role on an instance someone else paid to deploy.
 Because the host runs the constructor only during contract creation, no
-later call — including `initialize` below — can invoke it again or change
-who holds the role.
+later call — including `initialize` below — can invoke it again or hijack
+the role at deploy time. From then on, only the current admin can hand the
+role to a new address, via `set_admin` (see below).
 
 ### `initialize(token, base_bond, challenge_window_secs, finalize_reward_bps, registration_duration_secs, anti_snipe_extension_secs, anti_snipe_hard_max_secs, reveal_duration_secs, max_position, max_total_weight)`
 
@@ -244,6 +245,14 @@ twice, or the matching `Invalid*` error for any out-of-range parameter.
 
 Read-only lookup of the deployment-wide policy defaults new assertions are
 currently pinned from. Fails with `NotInitialized` before `initialize`.
+
+### `set_admin(new_admin)`
+
+Replaces the deployment admin. Requires the *current* admin's signature —
+the address `__constructor` originally pinned, or whoever it was last
+rotated to. The old admin loses authority the instant this call succeeds;
+there's no grace period or two-step handoff. Fails with `NotInitialized`
+before `initialize`. Emits `AdminUpdated { old_admin, new_admin }`.
 
 ### `set_paused_v2(paused)`
 
@@ -455,8 +464,8 @@ withdrawn. Emits `Withdrawn`.
 
 Cancels an active round before any terminal outcome has locked, refunding
 every already-funded position its exact principal, no forfeiture, no
-reward, as if the round never happened. Only callable by the admin fixed at
-`__constructor`, and only while paused (`NotPaused` otherwise) — cancellation
+reward, as if the round never happened. Only callable by the current admin
+(see `set_admin`), and only while paused (`NotPaused` otherwise) — cancellation
 is an emergency measure, requiring a pause first so it can never happen as
 a surprise mid-transaction.
 

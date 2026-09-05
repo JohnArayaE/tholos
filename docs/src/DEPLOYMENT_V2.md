@@ -12,14 +12,17 @@ point a Tholos v2 instance at real value on mainnet without an independent secur
 review first.
 
 Decide these parameters up front; none of them can be changed after
-`initialize`, and `admin` can't be changed at all once deployed, since it's
-pinned by the constructor at deploy time itself:
+`initialize`. `admin` is the exception worth calling out separately: it's
+pinned by the constructor at deploy time, not passed to `initialize` at
+all, and can only change afterward if the current admin itself authorizes
+a handoff via `set_admin` (see [Admin runbook](#admin-runbook) below) —
+there's no deploy-time or `initialize`-time input that can override it:
 
 ### Core parameters
 
 | Parameter | Guidance |
 | --- | --- |
-| `admin` | Passed to `stellar contract deploy` as a constructor argument, not to `initialize`. Controls `set_paused_v2` and `cancel_round` only; a hostile or lost admin key can grief active assertions via those two levers but has no direct profit path (no fee-taking, no fund-sweeping power). Pick an address whose key custody you trust for the life of the deployment: there's no `initialize`-time or later call that can reassign it. |
+| `admin` | Passed to `stellar contract deploy` as a constructor argument, not to `initialize`. Controls `set_paused_v2`, `cancel_round`, and its own rotation via `set_admin` only; a hostile or lost admin key can grief active assertions via those levers but has no direct profit path (no fee-taking, no fund-sweeping power). Pick an address whose key custody you trust: nothing at deploy or `initialize` time can override it, though the admin can hand the role to a new address later via `set_admin` if needed. |
 | `token` | Any SEP-41 token your users already hold. No swap step exists, so picking a token nobody has is a dead deployment. Must match v1's choice if accepting both v1 and v2 assertions in your integrations. |
 | `base_bond` | Size from the spam/griefing model in [BOND_SIZING.md](BOND_SIZING.md). Equal to v1's `bond_amount` in principle, but v2 adds a third-party registration tier: a cheaper base bond attracts counter-stake faster, while a larger one deters frivolous disputes. Set it using the same analysis as v1 (start with the larger of the assertion-spam and bad-faith-dispute floors, add any target attacker-loss margin), then check that `max_total_weight` and `max_position` will accommodate realistic multi-party dispute scenarios. Also capped at `MAX_BOND_AMOUNT`, a contract-enforced ceiling well above any realistic bond size. It exists so the bond can never overflow `finalize`'s reward-multiply arithmetic (`bond * finalize_reward_bps`) or the token balance held across registration and settlement. |
 | `challenge_window_secs` | Long enough that people who'd actually catch a bad assertion have a realistic chance to see it and act. Short windows finalize faster but catch less. In v2, this is the only deadline before the assertion is disputed; registration and reveal happen afterward, so budget time before this expires for dispute-scoped registration and reveal to complete. |
@@ -114,6 +117,21 @@ id to anyone.
 
 V2 has a narrower admin surface than v1. Notably, v2 has no equivalent to v1's `update_resolvers`; there
 is no resolver committee to rotate.
+
+### Rotating the admin
+
+If the admin key needs to change (planned custody handoff, or a compromised key that's still able to
+sign), the current admin can hand the role to a new address:
+
+```sh
+stellar contract invoke --id "$CONTRACT" --source admin --network testnet -- set_admin \
+  --new_admin "$NEW_ADMIN_ADDRESS"
+```
+
+This takes effect immediately: the old admin loses `set_paused_v2`/`cancel_round`/`set_admin` authority
+the instant the call succeeds, with no grace period. If the current admin's key is lost outright (not just
+compromised), there's no recovery path — `set_admin` requires the current admin's own signature, so a lost
+key means the role is stuck until redeployment.
 
 ### Pausing new assertions during an incident
 
