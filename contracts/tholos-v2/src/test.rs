@@ -1289,9 +1289,9 @@ fn test_register_position_amount_overflow_fails() {
     let env = Env::default();
     env.mock_all_auths();
     let token_id = setup(&env);
-    let contract_id = env.register(TholosV2, ());
-    let client = TholosV2Client::new(&env, &contract_id);
     let admin = Address::generate(&env);
+    let contract_id = env.register(TholosV2, (admin,));
+    let client = TholosV2Client::new(&env, &contract_id);
 
     // Lift the position and weight caps to the contract's legal maximum
     // (initialize rejects anything above MAX_SETTLEMENT_TOTAL_WEIGHT), so
@@ -1299,7 +1299,6 @@ fn test_register_position_amount_overflow_fails() {
     // checked_add in register().
     init_full(
         &client,
-        &admin,
         &token_id,
         DEFAULT_REGISTRATION_SECS,
         DEFAULT_ANTI_SNIPE_EXT_SECS,
@@ -1345,9 +1344,9 @@ fn test_register_eligible_total_overflow_fails() {
     let env = Env::default();
     env.mock_all_auths();
     let token_id = setup(&env);
-    let contract_id = env.register(TholosV2, ());
-    let client = TholosV2Client::new(&env, &contract_id);
     let admin = Address::generate(&env);
+    let contract_id = env.register(TholosV2, (admin,));
+    let client = TholosV2Client::new(&env, &contract_id);
 
     // Lift the position and weight caps to the contract's legal maximum
     // (initialize rejects anything above MAX_SETTLEMENT_TOTAL_WEIGHT), so
@@ -1355,7 +1354,6 @@ fn test_register_eligible_total_overflow_fails() {
     // checked_sub/checked_add chain.
     init_full(
         &client,
-        &admin,
         &token_id,
         DEFAULT_REGISTRATION_SECS,
         DEFAULT_ANTI_SNIPE_EXT_SECS,
@@ -2918,11 +2916,16 @@ fn test_admin_state_changes_renew_instance_storage_ttl() {
 fn test_admin_rotation_updates_authority() {
     let env = Env::default();
     let token_id = setup(&env);
-    let contract_id = env.register(TholosV2, ());
-    let client = TholosV2Client::new(&env, &contract_id);
     let old_admin = Address::generate(&env);
     let new_admin = Address::generate(&env);
     let arbitrary = Address::generate(&env);
+
+    // The constructor runs atomically as part of contract creation, before
+    // `contract_id` exists to build a precise MockAuthInvoke against, so it
+    // is authorized with the blanket mock instead.
+    env.mock_all_auths();
+    let contract_id = env.register(TholosV2, (old_admin.clone(),));
+    let client = TholosV2Client::new(&env, &contract_id);
 
     env.mock_auths(&[MockAuth {
         address: &old_admin,
@@ -2930,7 +2933,6 @@ fn test_admin_rotation_updates_authority() {
             contract: &contract_id,
             fn_name: "initialize",
             args: (
-                old_admin.clone(),
                 token_id.clone(),
                 DEFAULT_BOND,
                 DEFAULT_CHALLENGE_WINDOW,
@@ -2948,7 +2950,6 @@ fn test_admin_rotation_updates_authority() {
     }]);
     init(
         &client,
-        &old_admin,
         &token_id,
         DEFAULT_BOND,
         DEFAULT_CHALLENGE_WINDOW,
