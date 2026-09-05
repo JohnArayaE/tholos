@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useCallback, useMemo, useRef, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
 import { jobs as seedJobs, type Job, type Milestone, type MilestoneStatus } from "../data/jobs";
 import { JobsContext, type JobsContextValue, type NewJobInput } from "./jobs-context";
 import type { Assertion } from "../lib/tholos";
@@ -172,13 +172,21 @@ export function JobsProvider({ children }: { children: ReactNode }) {
     await reconcileFromChain(setJobs, jobId, milestoneId, milestone.assertionId, callerAddress);
   }, [jobs]);
 
+  // Kept in sync with `jobs` on every render, but deliberately not a
+  // dependency of `refreshMilestone` below: that callback is held in a
+  // MilestoneRow's polling-interval effect, and if its identity changed
+  // every time *any* milestone's state changed, one milestone's refresh
+  // would reset every other actively-polling row's timer.
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
+
   const refreshMilestone = useCallback(async (jobId: string, milestoneId: string, readAs: string) => {
-    const milestone = findMilestone(jobs, jobId, milestoneId);
+    const milestone = findMilestone(jobsRef.current, jobId, milestoneId);
     if (!milestone?.assertionId) {
       return;
     }
     await reconcileFromChain(setJobs, jobId, milestoneId, milestone.assertionId, readAs);
-  }, [jobs]);
+  }, []);
 
   const value = useMemo<JobsContextValue>(
     () => ({

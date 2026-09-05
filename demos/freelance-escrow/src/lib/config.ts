@@ -19,6 +19,21 @@ export const THOLOS_CONTRACT_ID: string = import.meta.env.VITE_THOLOS_CONTRACT_I
  * `Assertion.opened_at` read; it never gates the `finalize` call itself —
  * the contract remains the source of truth and rejects it if called early.
  */
-export const CHALLENGE_WINDOW_SECS: number = import.meta.env.VITE_CHALLENGE_WINDOW_SECS
-  ? Number(import.meta.env.VITE_CHALLENGE_WINDOW_SECS)
-  : 21600;
+const DEFAULT_CHALLENGE_WINDOW_SECS = 21600;
+
+function parseChallengeWindowSecs(): number {
+  const raw = import.meta.env.VITE_CHALLENGE_WINDOW_SECS;
+  if (!raw) {
+    return DEFAULT_CHALLENGE_WINDOW_SECS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    console.warn(
+      `Invalid VITE_CHALLENGE_WINDOW_SECS "${raw}"; falling back to default (${DEFAULT_CHALLENGE_WINDOW_SECS}s).`,
+    );
+    return DEFAULT_CHALLENGE_WINDOW_SECS;
+  }
+  return parsed;
+}
+
+export const CHALLENGE_WINDOW_SECS: number = parseChallengeWindowSecs();
