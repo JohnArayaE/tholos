@@ -208,22 +208,37 @@ only affect assertions created after the change.
 
 ## Functions
 
-### `initialize(admin, token, base_bond, challenge_window_secs, finalize_reward_bps, registration_duration_secs, anti_snipe_extension_secs, anti_snipe_hard_max_secs, reveal_duration_secs, max_position, max_total_weight)`
+### `__constructor(admin)`
+
+The contract's constructor: Soroban invokes it atomically as part of the
+same operation that creates the contract instance, not as a separate,
+later call. Requires `admin`'s signature and pins it as the permanently
+fixed admin for this instance. This closes a front-running gap the
+deploy-then-initialize(admin) shape used to have: since deploy and any
+follow-up call are otherwise separate transactions, nothing used to stop a
+third party from submitting their own `initialize` with their own `admin`
+first and claiming the role on an instance someone else paid to deploy.
+Because the host runs the constructor only during contract creation, no
+later call — including `initialize` below — can invoke it again or change
+who holds the role.
+
+### `initialize(token, base_bond, challenge_window_secs, finalize_reward_bps, registration_duration_secs, anti_snipe_extension_secs, anti_snipe_hard_max_secs, reveal_duration_secs, max_position, max_total_weight)`
 
 One-time setup, pinning the deployment-wide defaults every future
-assertion's `PolicySnapshotV2` is built from. Requires `admin`'s signature.
-`base_bond` must be positive and no greater than `MAX_BOND_AMOUNT` (so
-`finalize`'s reward-multiply can't overflow). `challenge_window_secs` and
-`reveal_duration_secs`/`registration_duration_secs` must each be non-zero
-and at most 7 days. `finalize_reward_bps` must be at most 1000.
-`anti_snipe_extension_secs` must not exceed `anti_snipe_hard_max_secs`, and
-`anti_snipe_hard_max_secs` must be at least `registration_duration_secs`.
-`max_total_weight` must be positive and no greater than
-`MAX_SETTLEMENT_TOTAL_WEIGHT` (so settlement's forfeiture-distribution
-multiply can't overflow); `max_position` must be positive and no greater
-than `max_total_weight`. `min_resolution_bond` is always set equal to
-`base_bond`. Fails with `AlreadyInitialized` if called twice, or the
-matching `Invalid*` error for any out-of-range parameter.
+assertion's `PolicySnapshotV2` is built from. Requires the signature of the
+admin `__constructor` fixed at deploy time; unlike v1, this call takes no
+`admin` parameter of its own. `base_bond` must be positive and no greater
+than `MAX_BOND_AMOUNT` (so `finalize`'s reward-multiply can't overflow).
+`challenge_window_secs` and `reveal_duration_secs`/`registration_duration_secs`
+must each be non-zero and at most 7 days. `finalize_reward_bps` must be at
+most 1000. `anti_snipe_extension_secs` must not exceed
+`anti_snipe_hard_max_secs`, and `anti_snipe_hard_max_secs` must be at least
+`registration_duration_secs`. `max_total_weight` must be positive and no
+greater than `MAX_SETTLEMENT_TOTAL_WEIGHT` (so settlement's
+forfeiture-distribution multiply can't overflow); `max_position` must be
+positive and no greater than `max_total_weight`. `min_resolution_bond` is
+always set equal to `base_bond`. Fails with `AlreadyInitialized` if called
+twice, or the matching `Invalid*` error for any out-of-range parameter.
 
 ### `get_policy() -> PolicySnapshotV2`
 
@@ -440,8 +455,8 @@ withdrawn. Emits `Withdrawn`.
 
 Cancels an active round before any terminal outcome has locked, refunding
 every already-funded position its exact principal, no forfeiture, no
-reward, as if the round never happened. Only callable by the admin set at
-`initialize`, and only while paused (`NotPaused` otherwise) — cancellation
+reward, as if the round never happened. Only callable by the admin fixed at
+`__constructor`, and only while paused (`NotPaused` otherwise) — cancellation
 is an emergency measure, requiring a pause first so it can never happen as
 a surprise mid-transaction.
 
